@@ -84,7 +84,7 @@ function generateSimulatedResponse(message, cards) {
         const cleanMsg = msg.replace(/[?,.!]/g, '');
         const words = cleanMsg.split(/\s+/).filter(w => w.length > 3 && w !== 'explain' && w !== 'what' && w !== 'about' && w !== 'how' && w !== 'the' && w !== 'query');
         const inferredTopic = words.length > 0 ? words[0].charAt(0).toUpperCase() + words[0].slice(1) : 'Study Topic';
-        
+
         topic = inferredTopic;
         explanation = `Here is a custom breakdown on **${inferredTopic}**! This topic represents key concepts, methods, and practical models. Exploring this subject helps build structural understanding and analytical frameworks. Let's use active recall flashcards to commit this to memory!`;
         simulatedCards = [
@@ -189,7 +189,7 @@ STRICT RULES — follow exactly:
 
         // Initialize dynamic model with system instructions and JSON structured output schema (tokens optimized for fast reply speed)
         const modelInstance = genAI.getGenerativeModel({
-            model: 'gemini-1.5-flash',
+            model: 'gemini-flash-latest',
             systemInstruction: systemPrompt,
             generationConfig: {
                 responseMimeType: "application/json",
@@ -211,8 +211,38 @@ STRICT RULES — follow exactly:
         });
 
         console.log('🤖 Sending structured request to Gemini:', message);
+        // Send message
         const result = await chat.sendMessage(message);
-        const aiText = result.response.text();
+
+        // TEMP DEBUG — remove after fixing
+        console.log('📦 Full Gemini result:', JSON.stringify(result, null, 2).substring(0, 500));
+
+        // ✅ Handle different SDK response formats
+        let aiText = '';
+
+        try {
+            // Method 1 — standard
+            aiText = result.response.text();
+            if (typeof aiText !== 'string') throw new Error('Not a string');
+        } catch (e1) {
+            try {
+                // Method 2 — candidates array
+                aiText = result.response.candidates[0].content.parts[0].text;
+            } catch (e2) {
+                try {
+                    // Method 3 — direct text
+                    aiText = result.response.candidates[0].content.parts[0].text;
+                } catch (e3) {
+                    // Method 4 — stringify and check
+                    const raw = JSON.stringify(result.response);
+                    console.log('🔍 Raw Gemini response:', raw);
+                    aiText = 'Sorry, could not parse AI response. Raw: ' + raw.substring(0, 200);
+                }
+            }
+        }
+
+        console.log('🤖 AI text type:', typeof aiText);
+        console.log('🤖 AI text preview:', String(aiText).substring(0, 100));
         console.log('✅ Gemini responded with structured JSON');
 
         let data;
@@ -243,11 +273,11 @@ STRICT RULES — follow exactly:
 
     } catch (err) {
         console.error('❌ Tutor error:', err.message);
-        
+
         // Handle common Gemini authentication/quota errors gracefully
         if (err.message.includes('API key') || err.message.includes('API_KEY') || err.message.includes('403') || err.message.includes('identity')) {
             console.log('⚠️ Invalid/unauthorized Gemini key. Falling back to high-fidelity simulation mode.');
-            
+
             // Re-fetch existing cards for the fallback generator
             let existingCards = [];
             try {
@@ -283,44 +313,70 @@ STRICT RULES — follow exactly:
 
 // ── POST /tutor/save-cards ─────────────────────────────
 router.post('/save-cards', async (req, res) => {
-    const { cards, userId } = req.body;
+  const { cards, userId, deckId } = req.body;
 
-    if (!cards || !userId)
-        return res.status(400).json({ error: 'Cards and userId required' });
+  if (!cards || !userId)
+    return res.status(400).json({ error: 'Cards and userId required' });
 
-    const session = driver.session();
-    try {
-        let saved = 0;
-        for (const card of cards) {
-            await session.run(
-                `MERGE (u:User {id: $userId})
-         MERGE (t:Topic {name: $topic})
-         CREATE (c:Card {
-           id:             randomUUID(),
-           front:          $front,
-           back:           $back,
-           topic:          $topic,
-           interval:       1,
-           easeFactor:     2.5,
-           repetitions:    0,
-           nextReviewDate: date(),
-           createdAt:      datetime(),
-           source:         'ai'
-         })
-         CREATE (u)-[:OWNS]->(c)
-         CREATE (c)-[:TAGGED]->(t)`,
-                { userId, front: card.front, back: card.back, topic: card.topic }
-            );
-            saved++;
-        }
-        console.log('✅ Saved', saved, 'AI cards');
-        res.json({ message: `${saved} cards saved!`, count: saved });
-
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    } finally {
-        await session.close();
+  const session = driver.session();
+  try {
+    let saved = 0;
+    for (const card of cards) {
+      if (deckId) {
+        // Save to specific deck
+        await session.run(
+          `MERGE (u:User {id: $userId})
+           MERGE (t:Topic {name: $topic})
+           MATCH (d:Deck {id: $deckId})
+           CREATE (c:Card {
+             id:             randomUUID(),
+             front:          $front,
+             back:           $back,
+             topic:          $topic,
+             interval:       1,
+             easeFactor:     2.5,
+             repetitions:    0,
+             nextReviewDate: date(),
+             createdAt:      datetime(),
+             source:         'ai'
+           })
+           CREATE (u)-[:OWNS]->(c)
+           CREATE (c)-[:TAGGED]->(t)
+           CREATE (d)-[:HAS_CARD]->(c)`,
+          { userId, deckId, front: card.front,
+            back: card.back, topic: card.topic }
+        );
+      } else {
+        // Save without deck
+        await session.run(
+          `MERGE (u:User {id: $userId})
+           MERGE (t:Topic {name: $topic})
+           CREATE (c:Card {
+             id:             randomUUID(),
+             front:          $front,
+             back:           $back,
+             topic:          $topic,
+             interval:       1,
+             easeFactor:     2.5,
+             repetitions:    0,
+             nextReviewDate: date(),
+             createdAt:      datetime(),
+             source:         'ai'
+           })
+           CREATE (u)-[:OWNS]->(c)
+           CREATE (c)-[:TAGGED]->(t)`,
+          { userId, front: card.front,
+            back: card.back, topic: card.topic }
+        );
+      }
+      saved++;
     }
+    res.json({ message: `${saved} cards saved!`, count: saved });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    await session.close();
+  }
 });
 
 // ── POST /tutor/quiz ───────────────────────────────────
@@ -359,7 +415,7 @@ router.post('/quiz', async (req, res) => {
 
         if (!isApiKeyset || !genAI) {
             console.log('⚠️ GEMINI_API_KEY is missing. Generating a high-fidelity simulated quiz.');
-            
+
             const sampleCards = weakCards.slice(0, 3);
             let quizText = "📝 **RecallIQ Simulated MCQ Quiz**\n\n";
             sampleCards.forEach((c, idx) => {
