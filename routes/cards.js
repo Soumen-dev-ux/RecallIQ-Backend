@@ -2,41 +2,67 @@ const express = require("express");
 const router = express.Router();
 const driver = require("../db");
 
-// ── POST /cards — Save a new card ──────────────────────
-router.post("/", async (req, res) => {
-  const { userId, front, back, topic } = req.body;
+// ── POST /cards — Save card (with optional deckId) ────
+router.post('/', async (req, res) => {
+  const { userId, front, back, topic, deckId } = req.body;
 
-  // Validate
-  if (!userId || !front || !back || !topic) {
-    return res.status(400).json({ error: "All fields are required" });
-  }
+  if (!userId || !front || !back || !topic)
+    return res.status(400).json({ error: 'All fields required' });
 
   const session = driver.session();
   try {
-    const result = await session.run(
-      `MERGE (u:User {id: $userId})
-       MERGE (t:Topic {name: $topic})
-       CREATE (c:Card {
-         id: randomUUID(),
-         front: $front,
-         back: $back,
-         topic: $topic,
-         interval: 1,
-         easeFactor: 2.5,
-         repetitions: 0,
-         nextReviewDate: date(),
-         createdAt: datetime()
-       })
-       CREATE (u)-[:OWNS]->(c)
-       CREATE (c)-[:TAGGED]->(t)
-       RETURN c`,
-      { userId, front, back, topic },
-    );
+    let query;
+    let params = { userId, front, back, topic };
 
-    const card = result.records[0].get("c").properties;
-    res.status(201).json({ message: "Card created!", card });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (deckId) {
+      // Save card AND link to deck
+      query = `
+        MERGE (u:User {id: $userId})
+        MERGE (t:Topic {name: $topic})
+        MATCH (d:Deck {id: $deckId})
+        CREATE (c:Card {
+          id:             randomUUID(),
+          front:          $front,
+          back:           $back,
+          topic:          $topic,
+          interval:       1,
+          easeFactor:     2.5,
+          repetitions:    0,
+          nextReviewDate: date(),
+          createdAt:      datetime()
+        })
+        CREATE (u)-[:OWNS]->(c)
+        CREATE (c)-[:TAGGED]->(t)
+        CREATE (d)-[:HAS_CARD]->(c)
+        RETURN c`;
+      params.deckId = deckId;
+    } else {
+      // Save card without deck (goes to default)
+      query = `
+        MERGE (u:User {id: $userId})
+        MERGE (t:Topic {name: $topic})
+        CREATE (c:Card {
+          id:             randomUUID(),
+          front:          $front,
+          back:           $back,
+          topic:          $topic,
+          interval:       1,
+          easeFactor:     2.5,
+          repetitions:    0,
+          nextReviewDate: date(),
+          createdAt:      datetime()
+        })
+        CREATE (u)-[:OWNS]->(c)
+        CREATE (c)-[:TAGGED]->(t)
+        RETURN c`;
+    }
+
+    const result = await session.run(query, params);
+    const card   = result.records[0].get('c').properties;
+    res.status(201).json({ message: 'Card saved!', card });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   } finally {
     await session.close();
   }
