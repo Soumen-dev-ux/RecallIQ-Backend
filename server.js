@@ -1,33 +1,28 @@
-process.on('uncaughtException', (err) => {
-  console.error('⚠️ Uncaught Exception detected:', err.message || err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('⚠️ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-const express    = require('express');
-const cors       = require('cors');
+const express = require('express');
+const cors = require('cors');
 require('dotenv').config();
-
 
 const cardRoutes = require('./routes/cards');
 const authRoutes = require('./routes/auth');
-const tutorRoutes = require('./routes/tutor');
+const tutorRoutes = require('./routes/tutor'); // ← must exist
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/cards', cardRoutes);
 app.use('/auth', authRoutes);
-app.use('/tutor', tutorRoutes);
+app.use('/cards', cardRoutes);
+app.use('/tutor', tutorRoutes); // ← must exist
 
 app.get('/', (req, res) => {
   res.json({ status: '🚀 RecallIQ backend running!' });
 });
 
+app.get('/ping', (req, res) => {
+  res.json({ status: 'alive' });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });
