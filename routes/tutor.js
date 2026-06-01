@@ -199,15 +199,34 @@ STRICT RULES — follow exactly:
             }
         });
 
-        // Build conversation history for Gemini
-        const history = (conversationHistory || []).map(m => ({
-            role: m.role === 'user' ? 'user' : 'model',
-            parts: [{ text: m.content }]
-        }));
+        // 1. Map roles to what Gemini expects ('user' and 'model')
+        let safeHistory = (conversationHistory || [])
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({
+            role:  m.role === 'user' ? 'user' : 'model',
+            parts: [{ text: m.content || '' }]
+          }));
+
+        // 2. Clean up: Ensure it doesn't start with a model/assistant message
+        while (safeHistory.length > 0 && safeHistory[0].role === 'model') {
+          safeHistory.shift();
+        }
+
+        // 3. Clean up: Force strict alternation (no double user or double model messages)
+        const validHistory = [];
+        let nextExpectedRole = 'user'; // Must start with user
+
+        for (const msg of safeHistory) {
+          if (msg.role === nextExpectedRole) {
+            validHistory.push(msg);
+            // Flip the expected role for the next iteration
+            nextExpectedRole = nextExpectedRole === 'user' ? 'model' : 'user';
+          }
+        }
 
         // Start chat with history
         const chat = modelInstance.startChat({
-            history: history,
+            history: validHistory,
         });
 
         console.log('🤖 Sending structured request to Gemini:', message);
