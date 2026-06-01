@@ -6,7 +6,15 @@ const { GoogleGenAI } = require('@google/genai');
 
 // Ensure your API key is in your Railway environment variables as GEMINI_API_KEY
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const model = ai.models.get({ model: 'gemini-3-pro-preview' });
+const model = {
+    startChat({ history, generationConfig }) {
+        return ai.chats.create({
+            model: 'gemini-2.5-flash',
+            history: history,
+            config: generationConfig
+        });
+    }
+};
 // ───────────────────────────────────────────────────────
 
 router.post('/chat', async (req, res) => {
