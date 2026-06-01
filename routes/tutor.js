@@ -1,35 +1,63 @@
 // routes/tutor.js
+const express = require('express');
+const router = express.Router();
+// Ensure your Gemini model config is imported at the top of your file
+// const { model } = require('../your-gemini-config-file'); 
 
 router.post('/chat', async (req, res) => {
   const { message, userId, conversationHistory } = req.body;
 
-  // ... (Keep your safeHistory filtering logic from before here) ...
+  if (!message) {
+    return res.status(400).json({ error: 'Message is required' });
+  }
+
+  // 1. Map incoming roles safely to Gemini standards
+  let safeHistory = (conversationHistory || [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({
+      role:  m.role === 'user' ? 'user' : 'model',
+      parts: [{ text: m.content || '' }]
+    }));
+
+  // 2. Prevent starting with a model/assistant response
+  while (safeHistory.length > 0 && safeHistory[0].role === 'model') {
+    safeHistory.shift();
+  }
+
+  // 3. Enforce strict alternation: user -> model -> user -> model
+  const validHistory = [];
+  let nextExpectedRole = 'user';
+
+  for (const msg of safeHistory) {
+    if (msg.role === nextExpectedRole) {
+      validHistory.push(msg);
+      nextExpectedRole = nextExpectedRole === 'user' ? 'model' : 'user';
+    }
+  }
 
   try {
+    // 4. Initialize the Gemini session safely
     const chat = model.startChat({
       history: validHistory,
       generationConfig: {
-        maxOutputTokens: 2048, // Increased token limit so it doesn't cut off JSON
-        temperature:     0.3,  // Lower temperature makes JSON formatting much more reliable
+        maxOutputTokens: 2048,
+        temperature:     0.3,
       }
     });
 
     const result = await chat.sendMessage(message);
-    let responseText = result.response.text().trim();
-    
-    console.log("Raw Gemini Output:", responseText); // Check your server logs for this!
+    let responseText = result.response.text() ? result.response.text().trim() : '';
 
-    // Clean up markdown fences if Gemini injected them
+    console.log("Raw Gemini Response:", responseText);
+
+    // 5. Peel off code block fences safely if present
     if (responseText.startsWith("```")) {
-      responseText = responseText.replace(/^
-```json\s*/i, "").replace(/```$/, "").trim();
+      responseText = responseText.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
     }
 
-    // Try to parse it as an object to see if it's already a JSON structure
+    // 6. Try parsing the JSON payload. Fallback gracefully to raw strings if it fails.
     try {
       const parsedJson = JSON.parse(responseText);
-      
-      // If it parsed successfully, send the structured object directly
       return res.json({
         message:     parsedJson.message || parsedJson.reply || responseText,
         reply:       parsedJson.reply || parsedJson.message || responseText,
@@ -40,7 +68,7 @@ router.post('/chat', async (req, res) => {
         simulated:   false
       });
     } catch (jsonErr) {
-      // Fallback: If it's just raw text response and not JSON string
+      // Fallback object to keep frontend from breaking
       return res.json({
         message:     responseText,
         reply:       responseText,
@@ -53,7 +81,9 @@ router.post('/chat', async (req, res) => {
     }
 
   } catch (err) {
-    console.error("Gemini Error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Gemini Runtime Error:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
+
+module.exports = router;
